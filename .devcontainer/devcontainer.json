@@ -1,0 +1,115 @@
+{
+  "name": "lyz-robotwin",
+  "shutdownAction": "none",
+
+  "dockerFile": "Dockerfile",
+  "build": {
+    "target": "target",
+    "options": ["--network=host", "--progress=plain"],
+    "args": {
+      "ROBOTWIN_REPO": "https://github.com/horserr/RoboTwin.git"
+      // "HTTP_PROXY": "http://127.0.0.1:7890",
+      // "HTTPS_PROXY": "http://127.0.0.1:7890",
+      // "http_proxy": "http://127.0.0.1:7890",
+      // "https_proxy": "http://127.0.0.1:7890"
+    }
+  },
+
+  // forward ssh port
+  "appPort": ["2222:2222"],
+  "portsAttributes": {
+    "2222": {
+      "label": "SSH Server"
+    }
+  },
+
+  "runArgs": [
+    // note: cannot use host network for wslc
+    // use this domain for windows host: host.docker.internal
+    // "--network=host"
+    "--gpus",
+    "all",
+    "--network=host"
+  ],
+
+  "containerEnv": {
+    // TODO change this for the server
+    // "CUDA_VISIBLE_DEVICES": "1",
+    "UV_PROJECT_ENVIRONMENT": "/opt/venv",
+
+    "GITHUB_USERNAME": "horserr"
+  },
+
+  "remoteEnv": {
+    "GH_TOKEN": "${localEnv:GH_TOKEN}",
+    "GITHUB_ACCESS_TOKEN": "${localEnv:GH_TOKEN}",
+
+    "HF_TOKEN": "${localEnv:HF_TOKEN}",
+    "DEEPSEEK_TOKEN": "${localEnv:DEEPSEEK_TOKEN}"
+  },
+
+  "remoteUser": "root",
+  "workspaceFolder": "/root/workspace/RoboTwin",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/root/workspace/RoboTwin,type=bind,consistency=cached",
+  "mounts": [
+    {
+      "source": "uv-python-volume",
+      "target": "/root/.local/share/uv/python",
+      "type": "volume"
+    },
+    {
+      "source": "uv-cache-volume",
+      "target": "/root/.cache/uv",
+      "type": "volume"
+    },
+    {
+      "source": "huggingface-cache-volume",
+      "target": "/root/.cache/huggingface/hub",
+      "type": "volume"
+    },
+    {
+      "source": "robotwin-venv-volume",
+      "target": "/opt/venv",
+      "type": "volume"
+    },
+    {
+      "source": "claude-code-config",
+      "target": "/home/root/.claude",
+      "type": "volume"
+    }
+  ],
+
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "files.eol": "\n",
+        "http.useLocalProxyConfiguration": false
+      },
+      "extensions": [
+        "FanaticPythoner.better-todo-tree",
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "the0807.uv-toolkit",
+        "fill-labs.dependi",
+        "meta.pyrefly",
+        "iliazeus.vscode-ansi",
+        "mads-hartmann.bash-ide-vscode"
+      ]
+    }
+  },
+
+  "features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+  },
+
+  // 最后一步跑环境自检（见 .devcontainer/check.sh）：
+  // --fix  自动补 /usr/share/vulkan/icd.d/nvidia_icd.json 软链、uv python install 3.11
+  // --soft 即使有 FAIL 也返回 0，避免自检失败导致整个容器创建中断；
+  //        具体报错在创建日志里，也可随时手动跑 bash .devcontainer/check.sh
+  "onCreateCommand": "${containerWorkspaceFolder}/.devcontainer/initialize.sh && ${containerWorkspaceFolder}/.devcontainer/onCreate.sh && ${containerWorkspaceFolder}/.devcontainer/check.sh --fix --soft",
+
+  "postCreateCommand": "${containerWorkspaceFolder}/.devcontainer/postCreate.sh && ${containerWorkspaceFolder}/.devcontainer/installAssets.sh",
+
+  // FIX: unset display is of no use
+  "postStartCommand": "unset DISPLAY && service ssh start"
+}
