@@ -43,6 +43,12 @@ dependencies = [
   "setuptools<82.0.0",
 ]
 
+[project.optional-dependencies]
+# flash-attn is a policy-side dependency (Qwen3-VL attention in .policy-venv),
+# not a simulator dependency, so it lives in an extra rather than the default
+# sim env. Install it with:  uv sync --extra policy
+policy = ["flash-attn>=2.8.3"]
+
 [build-system]
 requires = ["setuptools==69.5.1"]
 
@@ -57,9 +63,16 @@ name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
+# Pre-built GPU wheels (flash-attn and friends) from Astral.
+[[tool.uv.index]]
+name = "astral-cu128"
+url = "https://wheels.astral.sh/simple/cu128"
+explicit = true
+
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
+flash-attn = { index = "astral-cu128" }
 pytorch3d = { git = "https://github.com/facebookresearch/pytorch3d", branch = "stable" }
 xpolicylab = { path = "./XPolicyLab", editable = true }
 nvidia-curobo = { path = "./env/curobo", editable = true }
