@@ -2231,7 +2231,6 @@ dependencies = [
     { name = "wandb" },
     { name = "warp-lang" },
     { name = "websockets" },
-    { name = "xpolicylab" },
     { name = "zarr" },
 ]
 
@@ -2277,7 +2276,6 @@ requires-dist = [
     { name = "wandb" },
     { name = "warp-lang", specifier = "==1.12.0" },
     { name = "websockets", specifier = ">=13.0" },
-    { name = "xpolicylab", editable = "XPolicyLab" },
     { name = "zarr" },
 ]
 provides-extras = ["policy"]
@@ -3845,33 +3843,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/5d/da/426cfed3879d7b692080428c7b287d323aa1b6e52895c01ea698860c46ed/xatlas-0.0.11-pp310-pypy310_pp73-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:f90b69073aef1a39fe0b708576ffe4034d9508ebe9edcbfbd4092e1e683eff32", size = 267893, upload-time = "2025-07-04T16:46:20.011Z" },
     { url = "https://files.pythonhosted.org/packages/aa/24/cafe4af289301c84e194165bb4ae10014cc40fca2430ef2987bff968d169/xatlas-0.0.11-pp310-pypy310_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c6ac223ffc49167b553ff7e81af7b8b5a14a73d5b9e98789821511483b4cdee9", size = 262002, upload-time = "2025-07-04T16:46:21.107Z" },
     { url = "https://files.pythonhosted.org/packages/75/86/16ea4181e60462f773109e384a08db3fe79b1d73c1765e77adeefeccac31/xatlas-0.0.11-pp310-pypy310_pp73-win_amd64.whl", hash = "sha256:426c73173353800414a05270005070333afebfd1ab130f73767738d04664ba8e", size = 205708, upload-time = "2025-07-04T16:46:22.196Z" },
-]
-
-[[package]]
-name = "xpolicylab"
-version = "0.0.1"
-source = { editable = "XPolicyLab" }
-dependencies = [
-    { name = "h5py" },
-    { name = "msgpack" },
-    { name = "msgpack-numpy" },
-    { name = "numpy" },
-    { name = "opencv-python-headless" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
-    { name = "websockets" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "h5py", specifier = ">=3.8" },
-    { name = "msgpack", specifier = ">=1.0.8" },
-    { name = "msgpack-numpy", specifier = ">=0.4.8" },
-    { name = "numpy", specifier = ">=1.23" },
-    { name = "opencv-python-headless", specifier = ">=4.8" },
-    { name = "pydantic", specifier = ">=2.5" },
-    { name = "pyyaml", specifier = ">=6" },
-    { name = "websockets", specifier = ">=14.0" },
 ]
 
 [[package]]

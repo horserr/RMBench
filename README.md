@@ -28,17 +28,17 @@ conda activate RMBench
 RMBench Repo: https://github.com/RoboTwin-Platform/RMBench
 
 ```
-git clone --recurse-submodules https://github.com/RoboTwin-Platform/RMBench.git
+git clone https://github.com/RoboTwin-Platform/RMBench.git
 cd RMBench
 ```
 
-For an existing checkout, initialize the pinned XPolicyLab submodule:
+XPolicyLab is a separate repository (no longer a submodule). Clone it next to RMBench and refresh the pin; set `XPOLICYLAB_ROOT` to use a checkout anywhere else:
 
 ```
-git submodule update --init --recursive XPolicyLab
+bash scripts/update_xpolicylab.sh
 ```
 
-Then, run `scripts/_install.sh` to install basic conda envs, CuRobo, and XPolicyLab:
+Then, run `scripts/_install.sh` to install basic conda envs and CuRobo:
 
 ```
 bash scripts/_install.sh
@@ -118,7 +118,7 @@ bash policy/<Name>/eval.sh ...
 **XPolicyLab adapters** (recommended for new work):
 
 ```
-bash XPolicyLab/policy/Mem_0/eval.sh RMBench <task_name> <ckpt_name> <env_cfg_type> <action_type> <seed> \
+bash "${XPOLICYLAB_ROOT:-../XPolicyLab}/policy/Mem_0/eval.sh" RMBench <task_name> <ckpt_name> <env_cfg_type> <action_type> <seed> \
   <policy_gpu_id> <env_gpu_id> <policy_env> <eval_env>
 
 # or schedule the RMBench task list
@@ -131,7 +131,7 @@ bash scripts/eval_policy.sh multitask \
   --eval-env-conda-env RMBench
 ```
 
-See [XPolicyLab/policy/Mem_0/](XPolicyLab/policy/Mem_0/) for the Mem-0 adapter. Task configs live in `env_cfg/task_config/`.
+See the Mem-0 adapter under `${XPOLICYLAB_ROOT}/policy/Mem_0/` in the XPolicyLab repository. Task configs live in `env_cfg/task_config/`.
 
 # 👍 Citations
 

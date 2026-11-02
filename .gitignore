@@ -8,6 +8,8 @@ __pycache__/
 result/
 envs/curobo
 *.zip
+# XPolicyLab is a separate repository (located via XPOLICYLAB_ROOT, not a submodule)
+XPolicyLab/
 viewer_show.*
 eval_video/
 **/.DS_Store

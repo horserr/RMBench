@@ -22,6 +22,7 @@ from typing import Any, Mapping
 
 import yaml
 from rich.console import Console
+from xpolicylab_paths import resolve_xpolicylab_root
 from rich.progress import (
     BarColumn,
     Progress,
@@ -33,6 +34,7 @@ from rich.progress import (
 
 
 ROBOTWIN_ROOT = Path(__file__).resolve().parents[1]
+XPOLICYLAB_ROOT = resolve_xpolicylab_root()
 TASK_CONFIG_ROOT = ROBOTWIN_ROOT / "env_cfg" / "task_config"
 EVAL_OVERRIDE_FLAGS = {
     "eval_batch": "--eval_batch",
@@ -88,17 +90,11 @@ class EvalJob:
 
     @property
     def eval_script(self) -> Path:
-        return ROBOTWIN_ROOT / "XPolicyLab" / "policy" / self.policy_name / "eval.sh"
+        return XPOLICYLAB_ROOT / "policy" / self.policy_name / "eval.sh"
 
     @property
     def env_client_script(self) -> Path:
-        return (
-            ROBOTWIN_ROOT
-            / "XPolicyLab"
-            / "policy"
-            / self.policy_name
-            / "setup_eval_env_client.sh"
-        )
+        return XPOLICYLAB_ROOT / "policy" / self.policy_name / "setup_eval_env_client.sh"
 
     def command(self, gpu_id: str, endpoint: PolicyEndpoint | None = None) -> list[str]:
         if self.remote_enabled:
@@ -555,8 +551,8 @@ def parse_gpu_capacity(config: Mapping[str, Any], cli: argparse.Namespace) -> di
 def validate_jobs(jobs: list[EvalJob]) -> list[str]:
     errors: list[str] = []
     warnings: list[str] = []
-    if not (ROBOTWIN_ROOT / "XPolicyLab" / "setup_policy_server.py").is_file():
-        errors.append("XPolicyLab is not initialized; run git submodule update --init --recursive XPolicyLab.")
+    if not (XPOLICYLAB_ROOT / "setup_policy_server.py").is_file():
+        errors.append("XPolicyLab is not initialized; set XPOLICYLAB_ROOT or clone it next to RMBench (see scripts/update_xpolicylab.sh).")
 
     checked_policies: set[str] = set()
     checked_task_configs: set[str] = set()
@@ -595,9 +591,7 @@ def validate_jobs(jobs: list[EvalJob]) -> list[str]:
                         "'seen' or 'unseen'."
                     )
 
-    xpl_robot_info_path = (
-        ROBOTWIN_ROOT / "XPolicyLab" / "utils" / "robot" / "_robot_info.json"
-    )
+    xpl_robot_info_path = XPOLICYLAB_ROOT / "utils" / "robot" / "_robot_info.json"
     robotwin_robot_info_path = ROBOTWIN_ROOT / "env_cfg" / "robot" / "_robot_info.json"
     try:
         xpl_robot_info = json.loads(xpl_robot_info_path.read_text(encoding="utf-8"))
@@ -865,6 +859,8 @@ def run_job(
         environment["ROBOTWIN_EVAL_ARGS_FILE"] = str(args_path)
         environment["ROBOTWIN_SUPPRESS_EVAL_CONFIG"] = "1"
         environment["PYTHONUNBUFFERED"] = "1"
+        environment["BENCH_ROOT"] = str(ROBOTWIN_ROOT)
+        environment["XPOLICYLAB_ROOT"] = str(XPOLICYLAB_ROOT)
 
         if progress_display is not None:
             progress_display.add_job(job, gpu_id)

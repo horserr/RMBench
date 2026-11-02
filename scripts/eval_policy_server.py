@@ -20,6 +20,7 @@ from typing import Any, Mapping
 
 import yaml
 from rich.console import Console
+from xpolicylab_paths import resolve_xpolicylab_root
 from rich.progress import (
     BarColumn,
     Progress,
@@ -30,6 +31,7 @@ from rich.progress import (
 
 
 ROBOTWIN_ROOT = Path(__file__).resolve().parents[1]
+XPOLICYLAB_ROOT = resolve_xpolicylab_root()
 
 
 class ConfigError(ValueError):
@@ -267,7 +269,7 @@ def load_settings(config_path: Path) -> ServerSettings:
 
 
 def validate_settings(settings: ServerSettings) -> None:
-    policy_dir = ROBOTWIN_ROOT / "XPolicyLab" / "policy" / settings.policy_name
+    policy_dir = XPOLICYLAB_ROOT / "policy" / settings.policy_name
     server_script = policy_dir / "setup_eval_policy_server.sh"
     if not server_script.is_file():
         raise ConfigError(f"XPolicyLab policy server script is missing: {server_script}")
@@ -293,13 +295,7 @@ def build_instances(settings: ServerSettings) -> list[ServerInstance]:
 
 
 def server_script(settings: ServerSettings) -> Path:
-    return (
-        ROBOTWIN_ROOT
-        / "XPolicyLab"
-        / "policy"
-        / settings.policy_name
-        / "setup_eval_policy_server.sh"
-    )
+    return XPOLICYLAB_ROOT / "policy" / settings.policy_name / "setup_eval_policy_server.sh"
 
 
 def server_command(settings: ServerSettings, instance: ServerInstance) -> list[str]:
@@ -490,6 +486,11 @@ def run_servers(settings: ServerSettings, instances: list[ServerInstance]) -> in
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                env={
+                    **os.environ,
+                    "BENCH_ROOT": str(ROBOTWIN_ROOT),
+                    "XPOLICYLAB_ROOT": str(XPOLICYLAB_ROOT),
+                },
             )
             running.append(RunningServer(instance, process, log_path, log_file))
             if progress is not None:

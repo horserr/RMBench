@@ -24,7 +24,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV="${UV_PROJECT_ENVIRONMENT:-/opt/venv}"
 PY="${VENV}/bin/python"
-OPENPI_PY="${ROOT}/XPolicyLab/policy/Pi_05/openpi/.venv/bin/python"
+XPL_ROOT="${XPOLICYLAB_ROOT:-${ROOT}/XPolicyLab}"
+OPENPI_PY="${XPL_ROOT}/policy/Pi_05/openpi/.venv/bin/python"
 ICD_SRC="/etc/vulkan/icd.d/nvidia_icd.json"
 ICD_LINK="/usr/share/vulkan/icd.d/nvidia_icd.json"
 
@@ -189,7 +190,7 @@ else
     if uv python install 3.11 >/dev/null 2>&1 && [ -x "${OPENPI_PY}" ] && openpi_ver="$("${OPENPI_PY}" -V 2>&1)"; then
       pass "已修复解释器：${openpi_ver}"
     else
-      fail "uv python install 3.11 后仍不可用 → 完整重装：bash XPolicyLab/policy/Pi_05/install.sh"
+      fail "uv python install 3.11 后仍不可用 → 完整重装：bash ${XPL_ROOT}/policy/Pi_05/install.sh"
     fi
   else
     fail "openpi/.venv/bin/python 悬空（uv 管理的 Python 丢失），执行 uv python install 3.11 或加 --fix"
@@ -211,7 +212,7 @@ if [ -f "${ROOT}/assets/.extract_complete" ]; then
 else
   warn "缺少 assets/.extract_complete → 重建时会重新下载约 11G 资产"
 fi
-ckpt="${ROOT}/XPolicyLab/policy/Pi_05/checkpoints/RoboTwin-lerobot_v30-aloha_agilex-joint-0/29999"
+ckpt="${XPL_ROOT}/policy/Pi_05/checkpoints/RoboTwin-lerobot_v30-aloha_agilex-joint-0/29999"
 if [ -d "${ckpt}" ]; then
   pass "checkpoint 29999 已就位"
 else

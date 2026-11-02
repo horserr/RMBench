@@ -10,7 +10,7 @@ git config --global --add safe.directory '*'
 
 # Idempotent: safe to re-run on every container creation / rebuild.
 echo "[initialize] Updating git submodules..."
-git submodule update --init --recursive
+git submodule update --init --recursive env/curobo
 
 # update_xpolicylab.sh already guards against clobbering an existing checkout.
 echo "[initialize] Updating XPolicyLab..."

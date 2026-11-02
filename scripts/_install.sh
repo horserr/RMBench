@@ -10,9 +10,6 @@ python -m pip install "git+https://github.com/facebookresearch/pytorch3d.git@sta
 echo "Preparing XPolicyLab ..."
 bash "${RMBENCH_ROOT}/scripts/update_xpolicylab.sh"
 
-echo "Installing XPolicyLab in the RMBench environment ..."
-python -m pip install -e "${RMBENCH_ROOT}/XPolicyLab"
-
 echo "Adjusting code in sapien/wrapper/urdf_loader.py ..."
 # location of sapien, like "~/.conda/envs/RMBench/lib/python3.10/site-packages/sapien"
 SAPIEN_LOCATION=$(python -m pip show sapien | grep 'Location' | awk '{print $2}')/sapien

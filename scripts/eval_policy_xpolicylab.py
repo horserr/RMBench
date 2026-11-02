@@ -20,7 +20,6 @@ import yaml
 
 
 ROBOTWIN_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_XPOLICYLAB_ROOT = ROBOTWIN_ROOT / "XPolicyLab"
 TASK_CONFIG_ROOT = ROBOTWIN_ROOT / "env_cfg" / "task_config"
 
 for path in (ROBOTWIN_ROOT, ROBOTWIN_ROOT / "scripts", ROBOTWIN_ROOT / "description" / "utils"):
@@ -31,6 +30,7 @@ for path in (ROBOTWIN_ROOT, ROBOTWIN_ROOT / "scripts", ROBOTWIN_ROOT / "descript
 from envs import CONFIGS_PATH
 from envs.utils.create_actor import UnStableError
 from generate_episode_instructions import generate_episode_descriptions
+from xpolicylab_paths import resolve_xpolicylab_root
 
 
 CAMERA_NAME_MAP = {
@@ -80,7 +80,7 @@ def get_embodiment_config(robot_file: str) -> dict[str, Any]:
 
 def build_policy_client(usr_args: dict[str, Any]):
     protocol = usr_args.get("protocol", "ws")
-    xpolicylab_root = usr_args.get("xpolicylab_root") or os.environ.get("XPOLICYLAB_ROOT") or DEFAULT_XPOLICYLAB_ROOT
+    xpolicylab_root = resolve_xpolicylab_root(usr_args.get("xpolicylab_root"))
     add_xpolicylab_paths(xpolicylab_root)
 
     host = usr_args.get("host") or usr_args.get("policy_server_host") or "localhost"
@@ -1364,7 +1364,7 @@ def parse_args() -> dict[str, Any]:
         "seed": args.seed,
         "task_config": args.task_config,
         "instruction_type": args.instruction_type,
-        "xpolicylab_root": str(Path(args.root_dir).resolve() / "XPolicyLab"),
+        "xpolicylab_root": str(resolve_xpolicylab_root()),
         "eval_batch": parse_bool(args.eval_batch),
     }
 

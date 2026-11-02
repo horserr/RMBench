@@ -1,47 +1,49 @@
 #!/usr/bin/env bash
-# Pull the latest XPolicyLab commit from the branch configured in .gitmodules
-# (currently main) and update the RMBench submodule checkout.
+# Clone or refresh the XPolicyLab checkout that RMBench evaluates against.
+#
+# XPolicyLab is no longer a git submodule; it lives in a separate repository
+# located through XPOLICYLAB_ROOT (default: a sibling "XPolicyLab" directory
+# next to this repository). This script keeps that checkout pinned to the
+# revision RMBench is tested against.
 #
 # Usage:
 #   bash scripts/update_xpolicylab.sh
-#   bash scripts/update_xpolicylab.sh --stage
 #   bash scripts/update_xpolicylab.sh --install
-#   bash scripts/update_xpolicylab.sh --stage --install
 #
 # Environment:
-#   XPOLICYLAB_BRANCH  override the tracked branch (default: from .gitmodules, else main)
+#   XPOLICYLAB_ROOT   override the checkout location
+#   XPOLICYLAB_URL    override the clone URL (default: horserr/XPolicyLab)
+#   XPOLICYLAB_REV    override the pinned revision
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROBOTWIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-SUBMODULE_PATH="XPolicyLab"
-DO_STAGE=0
+RMBENCH_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+XPOLICYLAB_URL="${XPOLICYLAB_URL:-https://github.com/horserr/XPolicyLab.git}"
+XPOLICYLAB_REV="${XPOLICYLAB_REV:-800f7e1a4a9a44b4f827b241a34025cc43dcbd70}"
+XPOLICYLAB_ROOT="${XPOLICYLAB_ROOT:-${RMBENCH_ROOT}/../XPolicyLab}"
+
 DO_INSTALL=0
 
 usage() {
     cat <<'EOF'
 Usage: bash scripts/update_xpolicylab.sh [options]
 
-Fetch and check out the latest XPolicyLab commit on the branch configured in
-.gitmodules (currently main), then leave RMBench's submodule pointer updated in
-the working tree.
+Clone (or refresh) the standalone XPolicyLab checkout pinned to XPOLICYLAB_REV.
 
 Options:
-  --stage     git-add the updated XPolicyLab gitlink so it is ready to commit
-  --install   pip install -e ./XPolicyLab after a successful update
+  --install   pip install -e the checkout after a successful update
   -h, --help  show this help
 
 Environment:
-  XPOLICYLAB_BRANCH  override tracked branch (default: .gitmodules branch, else main)
+  XPOLICYLAB_ROOT  checkout location (default: sibling ../XPolicyLab)
+  XPOLICYLAB_URL   clone URL (default: horserr/XPolicyLab)
+  XPOLICYLAB_REV   pinned revision
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --stage)
-            DO_STAGE=1
-            shift
-            ;;
         --install)
             DO_INSTALL=1
             shift
@@ -49,11 +51,6 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             usage
             exit 0
-            ;;
-        -*)
-            echo "[XPolicyLab][ERROR] Unknown option: $1" >&2
-            usage >&2
-            exit 2
             ;;
         *)
             echo "[XPolicyLab][ERROR] Unexpected argument: $1" >&2
@@ -63,89 +60,31 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-cd "${ROBOTWIN_ROOT}"
-
-if [[ ! -f .gitmodules ]]; then
-    echo "[XPolicyLab][ERROR] ${ROBOTWIN_ROOT}/.gitmodules is missing." >&2
-    exit 1
+if [[ ! -e "${XPOLICYLAB_ROOT}/.git" ]]; then
+    echo "[XPolicyLab] Cloning ${XPOLICYLAB_URL} into ${XPOLICYLAB_ROOT} ..."
+    git clone "${XPOLICYLAB_URL}" "${XPOLICYLAB_ROOT}"
 fi
 
-configured_branch="$(git config -f .gitmodules --get submodule."${SUBMODULE_PATH}".branch || true)"
-branch="${XPOLICYLAB_BRANCH:-${configured_branch:-main}}"
-pinned_before="$(git rev-parse "HEAD:${SUBMODULE_PATH}" 2>/dev/null || true)"
+echo "[XPolicyLab] Fetching pinned revision ${XPOLICYLAB_REV:0:7} ..."
+git -C "${XPOLICYLAB_ROOT}" fetch --prune origin
+git -C "${XPOLICYLAB_ROOT}" checkout --detach "${XPOLICYLAB_REV}"
 
-if [[ -e "${SUBMODULE_PATH}/.git" ]]; then
-    if ! git -C "${SUBMODULE_PATH}" diff --quiet || \
-       ! git -C "${SUBMODULE_PATH}" diff --cached --quiet; then
-        echo "[XPolicyLab][ERROR] Tracked local changes would block a safe update." >&2
-        echo "Commit or stash the changes inside ${SUBMODULE_PATH}/, then retry." >&2
-        exit 1
-    fi
-fi
-
-echo "[XPolicyLab] Syncing submodule configuration..."
-git submodule sync -- "${SUBMODULE_PATH}"
-
-# Only initialize when the checkout is missing; re-running `submodule update`
-# on an existing checkout would revert it to the committed pin first.
-if [[ ! -e "${SUBMODULE_PATH}/.git" ]]; then
-    echo "[XPolicyLab] Initializing submodule checkout..."
-    git submodule update --init --recursive --progress "${SUBMODULE_PATH}"
-fi
-
-if [[ ! -e "${SUBMODULE_PATH}/.git" ]]; then
-    echo "[XPolicyLab][ERROR] Submodule initialization did not produce a valid checkout." >&2
-    exit 1
-fi
-
-echo "[XPolicyLab] Fetching latest ${branch} from upstream..."
-git -C "${SUBMODULE_PATH}" fetch --prune origin "${branch}"
-
-remote_tip="$(git -C "${SUBMODULE_PATH}" rev-parse "origin/${branch}")"
-current="$(git -C "${SUBMODULE_PATH}" rev-parse HEAD)"
-
-if [[ "${current}" == "${remote_tip}" ]]; then
-    echo "[XPolicyLab] Already on latest origin/${branch}: $(git -C "${SUBMODULE_PATH}" rev-parse --short HEAD)"
-else
-    echo "[XPolicyLab] Updating ${current:0:7} -> ${remote_tip:0:7} (origin/${branch})..."
-    git -C "${SUBMODULE_PATH}" checkout --detach "${remote_tip}"
-fi
-
-if [[ ! -f "${SUBMODULE_PATH}/setup_policy_server.py" ]]; then
+if [[ ! -f "${XPOLICYLAB_ROOT}/setup_policy_server.py" ]]; then
     echo "[XPolicyLab][ERROR] Checkout is missing setup_policy_server.py; update aborted." >&2
     exit 1
 fi
 
-commit_full="$(git -C "${SUBMODULE_PATH}" rev-parse HEAD)"
-commit_short="$(git -C "${SUBMODULE_PATH}" rev-parse --short HEAD)"
-subject="$(git -C "${SUBMODULE_PATH}" log -1 --pretty=%s)"
-
+commit_short="$(git -C "${XPOLICYLAB_ROOT}" rev-parse --short HEAD)"
+subject="$(git -C "${XPOLICYLAB_ROOT}" log -1 --pretty=%s)"
 echo "[XPolicyLab] Ready at ${commit_short} — ${subject}"
-if [[ -n "${pinned_before}" && "${pinned_before}" != "${commit_full}" ]]; then
-    echo "[XPolicyLab] RMBench pin: ${pinned_before:0:7} -> ${commit_short}"
-    echo "[XPolicyLab] Commits pulled:"
-    git -C "${SUBMODULE_PATH}" log --oneline "${pinned_before}..${commit_full}" | sed 's/^/  /'
-elif [[ -n "${pinned_before}" ]]; then
-    echo "[XPolicyLab] RMBench pin already matches ${commit_short}."
-fi
 
-robot_info="${SUBMODULE_PATH}/utils/robot/_robot_info.json"
+robot_info="${XPOLICYLAB_ROOT}/utils/robot/_robot_info.json"
 if [[ -f "${robot_info}" ]] && ! grep -q '"arx_x5"' "${robot_info}"; then
-    echo "[XPolicyLab][WARN] This upstream revision does not define the arx_x5 action profile." >&2
+    echo "[XPolicyLab][WARN] This revision does not define the arx_x5 action profile." >&2
     echo "[XPolicyLab][WARN] Select another compatible profile in the RMBench eval config." >&2
 fi
 
 if [[ "${DO_INSTALL}" -eq 1 ]]; then
     echo "[XPolicyLab] Installing editable package into the current Python environment..."
-    python -m pip install -e "${ROBOTWIN_ROOT}/${SUBMODULE_PATH}"
-fi
-
-if [[ "${DO_STAGE}" -eq 1 ]]; then
-    git add "${SUBMODULE_PATH}"
-    echo "[XPolicyLab] Staged ${SUBMODULE_PATH} at ${commit_short}."
-    echo "[XPolicyLab] Commit when ready, e.g.: git commit -m \"Bump XPolicyLab to ${commit_short}\""
-else
-    echo "[XPolicyLab] Working tree pin updated. Record it with:"
-    echo "  git add ${SUBMODULE_PATH} && git commit -m \"Bump XPolicyLab to ${commit_short}\""
-    echo "Or re-run with --stage to stage automatically."
+    python -m pip install -e "${XPOLICYLAB_ROOT}"
 fi
