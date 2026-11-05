@@ -1,0 +1,1243 @@
+ ▐▛███▛█   Claude Code v2.1.312
+▝▜██████▀  deepseek-v4-pro · API Usage Billing
+ ▝▝   ▝▝   ~/workspace/RMBench
+
+
+❯ /plan 我想要将 主 repo rmbench 和 @XPolicyLab/ 拆分开来，请你结合             
+@refactor.md 来制定计划。                                                       
+  ⎿  Enabled plan mode
+
+  Thought for 2m 11s, searched for 5 patterns, read 18 files, listed 4 directories, ran 3 shell commands (ctrl+o to expand)
+  ⎿  Loaded XPolicyLab/CLAUDE.md
+  ⎿  Loaded XPolicyLab/AGENTS.md
+  ⎿  Loaded 2 skills from XPolicyLab/.claude/skills
+  ⎿  2 skills available
+
+● I've read refactor.md, the .gitmodules/pyproject.toml wiring, all the coupling
+  points on both sides (scripts/eval_policy_*.py, scripts/_install.sh,
+  scripts/update_xpolicylab.sh, .devcontainer/*, and XPolicyLab's
+  utils/process_data.py, utils/get_action_dim.sh, policy/Mem_0 & MemConflict
+  scripts), and the XPolicyLab AGENTS.md contract.
+
+  Before I write the plan, two decisions genuinely change what the plan looks
+  like — the rest I can decide from the code.
+
+● User answered Claude's questions:
+  ⎿  · 拆分后 XPolicyLab 物理上放在哪里？这决定需要改动的范围。目前它是 RMBench 
+     的 git submodule，且 XPolicyLab 内部脚本用 `BENCH_ROOT = XPL_ROOT/..` 反推 
+     benchmark 根目录。 → 平级仓库 + 环境变量
+     · RMBench 真正依赖的 Mem_0 / MemConflict 策略适配器（eval.sh、setup_eval_po
+     licy_server.sh、deploy.yml、model.py）拆分后归谁？它们不在 xpolicylab pip 
+     包内（pyproject 排除了 policy/*）。 → 留在 XPolicyLab
+
+  Thought for 2m 27s, searched for 1 pattern, read 2 files, listed 1 directory (ctrl+o to expand)
+
+● I now have the complete picture — every coupling point on both sides, the
+  package layout (XPolicyLab.py bridge, policy/ excluded from pip), and the
+  exact subprocess-launch code that must inject env vars. I'll write the plan.
+
+● Updated plan
+  ⎿  /plan to preview
+
+● User approved Claude's plan
+  ⎿  Plan saved to: ~/.claude/plans/purrfect-bouncing-goblet.md · /plan to edit
+     拆分 RMBench 与 XPolicyLab 的实施计划
+
+     Context（背景与目标）
+
+     当前 XPolicyLab 是 RMBench 的 git submodule（.gitmodules 指向
+     horserr/XPolicyLab.git，pin 在 memconflict 分支的
+     11efb1db）。两边虽然已经通过 websocket
+     在架构上解耦，但代码里残留大量路径假设：
+
+     - RMBench 侧：ROBOTWIN_ROOT / "XPolicyLab" 硬编码在 3 个 eval
+       脚本、_install.sh、update_xpolicylab.sh、.devcontainer/*。
+     - XPolicyLab 侧：policy/*/setup_eval_*.sh、eval.sh 用 BENCH_ROOT="$(cd 
+       "${XPL_ROOT}/.." && pwd)" 反推 benchmark 根目录；utils/process_data.py 用
+       __file__/../../env_cfg；utils/get_action_dim.sh 用
+       ${ROOT_DIR}/XPolicyLab/...。
+
+     目标（用户已确认）：XPolicyLab 变成平级独立仓库，通过环境变量定位；Mem_0 / 
+     MemConflict 策略适配器继续留在 XPolicyLab 内。
+
+     目标布局与统一约定
+
+     - XPOLICYLAB_ROOT：指向 XPolicyLab checkout 的绝对路径（默认 $(dirname 
+       $RMBench)/XPolicyLab，即平级仓库）。RMBench 用它找
+       setup_policy_server.py、policy/<name>/、client_server/、utils/。
+     - BENCH_ROOT：指向 benchmark（RMBench）根目录的绝对路径。XPolicyLab 的
+       shell 脚本用 BENCH_ROOT="${BENCH_ROOT:-<旧 fallback>}" 读取；RMBench
+       启动这些脚本时注入 BENCH_ROOT=$ROBOTWIN_ROOT。
+     - 版本 pin：单一事实源 = scripts/update_xpolicylab.sh 里一个 XPOLICYLAB_REV
+       变量（默认 11efb1dbd8fc03417c61a9c9840dd9baa1986640），clone 时 checkout
+       到该 rev。
+
+     ---
+
+     A. RMBench 侧改动
+
+     A1. 去 submodule
+
+     - .gitmodules：删除 [submodule "XPolicyLab"] 段（保留 env/curobo）。
+     - .gitignore：新增 XPolicyLab/（避免手动 clone 的 checkout 被提交）。
+     - git 操作（实现阶段执行）：git rm --cached XPolicyLab、删除
+       .git/modules/XPolicyLab 元数据；XPolicyLab 之后在 $XPOLICYLAB_ROOT 手动
+       clone。
+
+     A2. 新增共享解析器 scripts/xpolicylab_paths.py
+
+     新增一个模块（三个 eval 脚本都以 python scripts/<name>.py
+     方式运行，scripts/ 自动是 sys.path[0]，可 import xpolicylab_paths），导出：
+     - resolve_xpolicylab_root(cli_value=None) -> Path：优先级
+       cli_value（--xpolicylab_root）> $XPOLICYLAB_ROOT > ROBOTWIN_ROOT.parent /
+       "XPolicyLab"；校验 root/setup_policy_server.py 存在，否则报错并提示
+       clone 命令。
+
+     A3. scripts/eval_policy_xpolicylab.py（客户端）
+
+     - 删除 DEFAULT_XPOLICYLAB_ROOT = ROBOTWIN_ROOT / "XPolicyLab"（L23）。
+     - build_policy_client（L81–84）与 parse_args（L1367）：改用
+       resolve_xpolicylab_root()，不再写死
+       Path(args.root_dir)/"XPolicyLab"。保留 add_xpolicylab_paths()（它把
+       checkout 根塞进 sys.path，使 from client_server.ws import WsModelClient
+       仍可用）——只是把传入的根换成解析结果。
+
+     A4. scripts/eval_policy_multitask.py（多卡调度器）
+
+     - EvalJob.eval_script（L90–91）与 env_client_script（L93–101）：用
+       resolve_xpolicylab_root() 替换 ROBOTWIN_ROOT / "XPolicyLab"。
+     - validate_jobs（L558–600）：setup_policy_server.py 与
+       utils/robot/_robot_info.json 的存在性检查改用解析结果；报错文案从 "run
+       git submodule update…" 改为 "set XPOLICYLAB_ROOT / clone XPolicyLab"。
+     - 启动子进程处（L863–867）：在 environment 里注入 environment["BENCH_ROOT"]
+       = str(ROBOTWIN_ROOT) 与 environment["XPOLICYLAB_ROOT"] = 
+       str(resolve_xpolicylab_root())，让 XPolicyLab 的 eval.sh/setup_eval_*.sh
+       能拿到 benchmark 根目录。
+
+     A5. scripts/eval_policy_server.py（服务池启动器）
+
+     - validate_settings（L270）与 server_script（L295–302）：用
+       resolve_xpolicylab_root() 替换 ROBOTWIN_ROOT / "XPolicyLab"。
+     - subprocess.Popen（L487–493）：补 env={**os.environ, "BENCH_ROOT": 
+       str(ROBOTWIN_ROOT), "XPOLICYLAB_ROOT": str(resolve_xpolicylab_root())}。
+
+     A6. pyproject.toml
+
+     - 删除 dependencies 里的 "xpolicylab"（L42）与 [tool.uv.sources] 里的
+       xpolicylab = { path = "./XPolicyLab", editable = true 
+       }（L77）。理由：client_server/utils 已通过
+       add_xpolicylab_paths($XPOLICYLAB_ROOT) 提供，且 RMBench 的 pyproject
+       已直接声明 websockets/msgpack/msgpack-numpy 等传递依赖；policy/
+       本来就不在 pip 包内，pip install -e XPolicyLab 无法提供它。
+     - 重新生成 uv.lock（uv lock）。
+
+     A7. scripts/_install.sh 与 scripts/update_xpolicylab.sh
+
+     - _install.sh：把 L10–14（update_xpolicylab.sh + pip install -e 
+       XPolicyLab）改为 bash scripts/update_xpolicylab.sh（该脚本负责 clone 到
+       $XPOLICYLAB_ROOT）；去掉 pip install -e XPolicyLab。
+     - update_xpolicylab.sh：整脚本从「submodule 管理」改为「普通 clone/pull
+       助手」——确定 XPOLICYLAB_ROOT，缺失则 git clone --branch <pin> 
+       https://github.com/horserr/XPolicyLab.git 到该路径，存在则 git -C 
+       $XPOLICYLAB_ROOT fetch 并按 XPOLICYLAB_REV checkout；删除所有 git 
+       submodule/git config -f .gitmodules 逻辑。
+
+     A8. .devcontainer/check.sh、.devcontainer/initialize.sh
+
+     - check.sh L27（OPENPI_PY）、L192、L214：${ROOT}/XPolicyLab/... →
+       ${XPOLICYLAB_ROOT:-$ROOT/XPolicyLab}/...。
+     - initialize.sh L13：git submodule update --init --recursive 改为 git 
+       submodule update --init --recursive env/curobo（只保留 curobo）+ 调用
+       scripts/update_xpolicylab.sh 拉取 XPolicyLab。
+
+     A9. README.md
+
+     - 安装章节：移除 --recurse-submodules 对 XPolicyLab 的说明与 git submodule 
+       update --init --recursive XPolicyLab；改为「单独 clone XPolicyLab
+       到平级目录（或设 XPOLICYLAB_ROOT）+ bash 
+       scripts/update_xpolicylab.sh」。运行章节里 bash 
+       XPolicyLab/policy/Mem_0/eval.sh ... 的示例同步改为
+       $XPOLICYLAB_ROOT/policy/Mem_0/eval.sh ...（或说明 export）。
+
+     ---
+
+     B. XPolicyLab 侧改动（horserr/XPolicyLab fork）
+
+     ▎ 核心原则：所有 BENCH_ROOT 一律改成「env var 覆盖 + 旧路径
+     ▎ fallback」，保持对旧布局（XPolicyLab 嵌在 benchmark 内）的向后兼容。
+
+     B1. 策略适配器脚本：BENCH_ROOT 环境变量化
+
+     在 policy/demo_policy/（参考模板）、policy/Mem_0/、policy/MemConflict/
+     的以下脚本里，把
+     BENCH_ROOT="$(cd "${XPL_ROOT}/.." && pwd)"
+     统一改为
+     BENCH_ROOT="${BENCH_ROOT:-$(cd "${XPL_ROOT}/.." && pwd)}"：
+     - setup_eval_env_client.sh、setup_eval_policy_server.sh、eval.sh（demo_poli
+       cy 的 eval.sh 也含此推导）。
+     - 其余 60+ 个适配器若有相同一行，用一次 sed 批量替换（幂等、向后兼容）。
+
+     B2. setup_eval_policy_server.sh（Mem_0 / MemConflict / demo_policy）
+
+     - 新增 XPL_PARENT="$(cd "${XPL_ROOT}/.." && pwd)"，把
+       PYTHONPATH="${BENCH_ROOT}:${UPSTREAM_DIR}:..." 改为 PYTHONPATH="${XPL_PAR
+       ENT}:${UPSTREAM_DIR}:${BENCH_ROOT}:..."。原因：拆分后 import 
+       XPolicyLab.policy.<name>.model 依赖的是 XPolicyLab 的父目录在 sys.path
+       上（XPL_PARENT），不再等于 BENCH_ROOT；BENCH_ROOT 保留用于适配器可能
+       import benchmark 模块。
+     - action_dim=$(bash "${UTILS_DIR}/get_action_dim.sh" "${BENCH_ROOT}" ...)
+       改为传 ${XPL_ROOT}（见 B3）。
+
+     B3. utils/get_action_dim.sh
+
+     把读文件路径 os.path.join(root_dir, "XPolicyLab", "utils", "robot", 
+     "_robot_info.json") 改为 os.path.join(root_dir, "utils", "robot", 
+     "_robot_info.json")。这是 XPolicyLab 自己的 robot info（按 env_cfg_type
+     键），与 benchmark 无关；调用方改传 $XPL_ROOT 后即完全解耦。
+
+     B4. policy/*/install.sh（demo_policy / Mem_0 / MemConflict）
+
+     ROOT_DIR="$(cd "${POLICY_DIR}/../../.." && pwd)" + pip install -e 
+     "${ROOT_DIR}/XPolicyLab" 改为 XPL_ROOT="$(cd "${POLICY_DIR}/../.." && pwd)"
+     + pip install -e "${XPL_ROOT}"（安装 XPolicyLab 自身，不再假设它在
+     benchmark 内）。
+
+     B5. policy/Mem_0|MemConflict/process_data_batch.sh
+
+     ROOT_DIR="$(cd "${POLICY_DIR}/../../.." && pwd)"（用于
+     ${ROOT_DIR}/data/${bench_name} 读取 benchmark 数据）改为
+     ROOT_DIR="${BENCH_ROOT:-$(cd "${POLICY_DIR}/../../.." && pwd)}"。
+
+     B6. utils/process_data.py
+
+     get_robot_action_dim_info / get_action_dim / get_batch_size（L252–269）里
+     os.path.join(os.path.dirname(__file__), "../../env_cfg", ...) 改为：优先
+     os.environ.get("BENCH_ROOT") 下的
+     <BENCH_ROOT>/env_cfg/...，未设置时回退到现有
+     ../../env_cfg（离线转换场景保留向后兼容）。
+
+     ---
+
+     C. 验证（端到端）
+
+     1. submodule 已摘除：git submodule status 只剩 env/curobo；git status
+        干净；XPolicyLab/ 不在 index。
+     2. 依赖解析：uv lock（或 uv sync）成功，uv.lock 不再含 xpolicylab。
+     3. 单任务单进程通跑（最小闭环）：
+        - export XPOLICYLAB_ROOT=../XPolicyLab（平级 clone 后）
+        - bash $XPOLICYLAB_ROOT/policy/demo_policy/eval.sh RMBench <task> <ckpt>
+          <env_cfg_type> <action_type> <seed> <gpu> <gpu> <policy_env> 
+          <eval_env>（用 demo_policy 验证协议链路；EVAL_ENV_TYPE=debug 可先跑
+          debug 客户端）。
+        - 确认 server 端 import XPolicyLab.policy.<name>.model 成功、client 端
+          from client_server.ws import WsModelClient 成功、get_action_dim.sh
+          返回正确维度。
+     4. Mem_0/MemConflict：bash $XPOLICYLAB_ROOT/policy/Mem_0/eval.sh RMBench 
+        cover_blocks <ckpt> arx_x5 joint 0 0 0 <policy_env> <eval_env> 通跑（无
+        BENCH_ROOT 报错）。
+     5. 调度器路径：bash scripts/eval_policy.sh multitask --config 
+        env_cfg/eval/all_tasks.yml --policy-name Mem_0 ...，确认 validate_jobs
+        通过（不再报 "XPolicyLab is not initialized"），子进程日志里有
+        BENCH_ROOT/XPOLICYLAB_ROOT。
+     6. 服务池：bash scripts/eval_policy.sh serve --policy-name Mem_0 ... 能启动
+        policy server，健康检查通过。
+
+     ---
+
+     决策与注意事项
+
+     - 不做：不把 Mem_0/MemConflict 移入 RMBench 的 policy/（用户已确认留在
+       XPolicyLab），因此不改动 setup_policy_server.py 的
+       XPolicyLab.policy.<name>.model 导入约定。
+     - pip 依赖：移除 xpolicylab 包依赖，单一事实源为 $XPOLICYLAB_ROOT
+       checkout；若日后想让 uv sync 完全自包含，可再加回 xpolicylab = { git = 
+       "...", rev = XPOLICYLAB_REV }（只提供 client_server+utils，policy/ 仍需
+       checkout）。
+     - 向后兼容：所有 XPolicyLab 侧改动都用 ${VAR:-fallback} 形式，旧「嵌在
+       benchmark 内」布局仍可工作。
+     - 本仓库现状：RMBench 根目录无顶层 policy/（README 里提到的 policy/Mem-0
+       属于上游 RoboTwin，本 fork 未包含），故本计划不涉及 RMBench 顶层
+       policy/。
+
+  Thought for 17s (ctrl+o to expand)
+
+● I'll implement the plan now. Let me start by reading the remaining files I
+  need for precise edits.
+
+  Thought for 1s, read 3 files (ctrl+o to expand)
+
+● Write(scripts/xpolicylab_paths.py)
+  ⎿  Wrote 41 lines to scripts/xpolicylab_paths.py
+       1 """Shared resolution of the XPolicyLab checkout location.
+       2 
+       3 RMBench no longer vendors XPolicyLab as a git submodule; it live
+         s in a separate
+       4 repository and is located through, in priority order:
+       5 
+       6   1. an explicit value (e.g. the ``--xpolicylab_root`` CLI flag)
+       7   2. the ``XPOLICYLAB_ROOT`` environment variable
+       8   3. a sibling ``XPolicyLab`` directory next to this repository
+       9 
+     … +32 lines (ctrl+o to expand)
+
+  Thought for 1s (ctrl+o to expand)
+
+● Update(.gitmodules)
+  ⎿  Removed 4 lines
+      1 -[submodule "XPolicyLab"]                                        
+      2 -  path = XPolicyLab                                             
+      3 -  url = https://github.com/horserr/XPolicyLab.git               
+      4 -  branch = main                                                 
+      1  [submodule "env/curobo"]
+      2    path = env/curobo
+      3    url = https://github.com/NVlabs/curobo.git
+
+● Update(.gitignore)
+  ⎿  Added 2 lines
+       8  result/
+       9  envs/curobo
+      10  *.zip
+      11 +# XPolicyLab is a separate repository (located via XPOLICYLAB_R
+         +OOT, not a submodule)                                          
+      12 +XPolicyLab/                                                    
+      13  viewer_show.*
+      14  eval_video/
+      15  **/.DS_Store
+
+  Thought for 1s (ctrl+o to expand)
+
+● Update(pyproject.toml)
+  ⎿  Removed 1 line
+      39    # git based dependencies
+      40    "pytorch3d",
+      41    "nvidia-curobo",
+      42 -  "xpolicylab",                                                
+      42    "setuptools<82.0.0",
+      43  ]
+      44  
+
+● Update(pyproject.toml)
+  ⎿  Removed 1 line
+      73  torchvision = { index = "pytorch-cu128" }
+      74  flash-attn = { index = "astral-cu128" }
+      75  pytorch3d = { git = "https://github.com/facebookresearch/pytorc
+          h3d", branch = "stable" }
+      76 -xpolicylab = { path = "./XPolicyLab", editable = true }        
+      76  nvidia-curobo = { path = "./env/curobo", editable = true }
+
+  Thought for 2s (ctrl+o to expand)
+
+● Update(scripts/eval_policy_xpolicylab.py)
+  ⎿  Added 1 line
+      31  from envs import CONFIGS_PATH
+      32  from envs.utils.create_actor import UnStableError
+      33  from generate_episode_instructions import generate_episode_desc
+          riptions
+      34 +from xpolicylab_paths import resolve_xpolicylab_root           
+      35  
+      36  
+      37  CAMERA_NAME_MAP = {
+
+● Update(scripts/eval_policy_xpolicylab.py)
+  ⎿  Removed 1 line
+      20  
+      21  
+      22  ROBOTWIN_ROOT = Path(__file__).resolve().parents[1]
+      23 -DEFAULT_XPOLICYLAB_ROOT = ROBOTWIN_ROOT / "XPolicyLab"         
+      23  TASK_CONFIG_ROOT = ROBOTWIN_ROOT / "env_cfg" / "task_config"
+      24  
+      25  for path in (ROBOTWIN_ROOT, ROBOTWIN_ROOT / "scripts", ROBOTWIN
+          _ROOT / "description" / "utils"):
+
+● Update(scripts/eval_policy_xpolicylab.py)  ⎿  Added 1 line, removed 1 line
+      80  
+      81  def build_policy_client(usr_args: dict[str, Any]):
+      82      protocol = usr_args.get("protocol", "ws")
+      83 -    xpolicylab_root = usr_args.get("xpolicylab_root") or os.env
+         -iron.get("XPOLICYLAB_ROOT") or DEFAULT_XPOLICYLAB_ROOT         
+      83 +    xpolicylab_root = resolve_xpolicylab_root(usr_args.get("xpo
+         +licylab_root"))                                                
+      84      add_xpolicylab_paths(xpolicylab_root)
+      85  
+      86      host = usr_args.get("host") or usr_args.get("policy_server_
+          host") or "localhost"
+
+● Update(scripts/eval_policy_xpolicylab.py)
+  ⎿  Added 1 line, removed 1 line
+      1364          "seed": args.seed,
+      1365          "task_config": args.task_config,
+      1366          "instruction_type": args.instruction_type,
+      1367 -        "xpolicylab_root": str(Path(args.root_dir).resolve() 
+           -/ "XPolicyLab"),                                             
+      1367 +        "xpolicylab_root": str(resolve_xpolicylab_root()),   
+      1368          "eval_batch": parse_bool(args.eval_batch),
+      1369      }
+      1370  
+
+  Thought for 2s, read 1 file (ctrl+o to expand)
+
+● Update(scripts/eval_policy_multitask.py)
+  ⎿  Added 1 line
+      22  
+      23  import yaml
+      24  from rich.console import Console
+      25 +from xpolicylab_paths import resolve_xpolicylab_root           
+      26  from rich.progress import (
+      27      BarColumn,
+      28      Progress,
+
+● Update(scripts/eval_policy_multitask.py)
+  ⎿  Added 1 line
+      34  
+      35  
+      36  ROBOTWIN_ROOT = Path(__file__).resolve().parents[1]
+      37 +XPOLICYLAB_ROOT = resolve_xpolicylab_root()                    
+      38  TASK_CONFIG_ROOT = ROBOTWIN_ROOT / "env_cfg" / "task_config"
+      39  EVAL_OVERRIDE_FLAGS = {
+      40      "eval_batch": "--eval_batch",
+
+● Update(scripts/eval_policy_multitask.py)
+  ⎿  Added 2 lines, removed 8 lines
+       90  
+       91      @property
+       92      def eval_script(self) -> Path:
+       93 -        return ROBOTWIN_ROOT / "XPolicyLab" / "policy" / self.
+          -policy_name / "eval.sh"                                       
+       93 +        return XPOLICYLAB_ROOT / "policy" / self.policy_name /
+          + "eval.sh"                                                    
+       94  
+       95      @property
+       96      def env_client_script(self) -> Path:
+       97 -        return (                                              
+       98 -            ROBOTWIN_ROOT                                     
+       99 -            / "XPolicyLab"                                    
+      100 -            / "policy"                                        
+      101 -            / self.policy_name                                
+      102 -            / "setup_eval_env_client.sh"                      
+      103 -        )                                                     
+       97 +        return XPOLICYLAB_ROOT / "policy" / self.policy_name /
+          + "setup_eval_env_client.sh"                                   
+       98  
+       99      def command(self, gpu_id: str, endpoint: PolicyEndpoint | 
+           None = None) -> list[str]:
+      100          if self.remote_enabled:
+
+  Thought for 3s (ctrl+o to expand)
+
+● Update(scripts/eval_policy_multitask.py)
+  ⎿  Added 2 lines, removed 2 lines
+      551  def validate_jobs(jobs: list[EvalJob]) -> list[str]:
+      552      errors: list[str] = []
+      553      warnings: list[str] = []
+      554 -    if not (ROBOTWIN_ROOT / "XPolicyLab" / "setup_policy_serve
+          -r.py").is_file():                                             
+      555 -        errors.append("XPolicyLab is not initialized; run git 
+          -submodule update --init --recursive XPolicyLab.")             
+      554 +    if not (XPOLICYLAB_ROOT / "setup_policy_server.py").is_fil
+          +e():                                                          
+      555 +        errors.append("XPolicyLab is not initialized; set XPOL
+          +ICYLAB_ROOT or clone it next to RMBench (see scripts/update_xp
+          +olicylab.sh).")                                               
+      556  
+      557      checked_policies: set[str] = set()
+      558      checked_task_configs: set[str] = set()
+
+● Update(scripts/eval_policy_multitask.py)
+  ⎿  Added 1 line, removed 3 lines
+      591                          "'seen' or 'unseen'."
+      592                      )
+      593  
+      594 -    xpl_robot_info_path = (                                   
+      595 -        ROBOTWIN_ROOT / "XPolicyLab" / "utils" / "robot" / "_r
+          -obot_info.json"                                               
+      596 -    )                                                         
+      594 +    xpl_robot_info_path = XPOLICYLAB_ROOT / "utils" / "robot" 
+          +/ "_robot_info.json"                                          
+      595      robotwin_robot_info_path = ROBOTWIN_ROOT / "env_cfg" / "ro
+           bot" / "_robot_info.json"
+      596      try:
+      597          xpl_robot_info = json.loads(xpl_robot_info_path.read_t
+           ext(encoding="utf-8"))
+
+● Update(scripts/eval_policy_multitask.py)
+  ⎿  Added 2 lines
+      859          environment["ROBOTWIN_EVAL_ARGS_FILE"] = str(args_path
+           )
+      860          environment["ROBOTWIN_SUPPRESS_EVAL_CONFIG"] = "1"
+      861          environment["PYTHONUNBUFFERED"] = "1"
+      862 +        environment["BENCH_ROOT"] = str(ROBOTWIN_ROOT)        
+      863 +        environment["XPOLICYLAB_ROOT"] = str(XPOLICYLAB_ROOT) 
+      864  
+      865          if progress_display is not None:
+      866              progress_display.add_job(job, gpu_id)
+
+  Thought for 1s (ctrl+o to expand)
+
+● Update(scripts/eval_policy_server.py)
+  ⎿  Added 1 line
+      20  
+      21  import yaml
+      22  from rich.console import Console
+      23 +from xpolicylab_paths import resolve_xpolicylab_root           
+      24  from rich.progress import (
+      25      BarColumn,
+      26      Progress,
+
+● Update(scripts/eval_policy_server.py)
+  ⎿  Added 1 line
+      31  
+      32  
+      33  ROBOTWIN_ROOT = Path(__file__).resolve().parents[1]
+      34 +XPOLICYLAB_ROOT = resolve_xpolicylab_root()                    
+      35  
+      36  
+      37  class ConfigError(ValueError):
+
+● Update(scripts/eval_policy_server.py)
+  ⎿  Added 1 line, removed 1 line
+      269  
+      270  
+      271  def validate_settings(settings: ServerSettings) -> None:
+      272 -    policy_dir = ROBOTWIN_ROOT / "XPolicyLab" / "policy" / set
+          -tings.policy_name                                             
+      272 +    policy_dir = XPOLICYLAB_ROOT / "policy" / settings.policy_
+          +name                                                          
+      273      server_script = policy_dir / "setup_eval_policy_server.sh"
+      274      if not server_script.is_file():
+      275          raise ConfigError(f"XPolicyLab policy server script is
+            missing: {server_script}")
+
+● Update(scripts/eval_policy_server.py)
+  ⎿  Added 1 line, removed 7 lines
+      295  
+      296  
+      297  def server_script(settings: ServerSettings) -> Path:
+      298 -    return (                                                  
+      299 -        ROBOTWIN_ROOT                                         
+      300 -        / "XPolicyLab"                                        
+      301 -        / "policy"                                            
+      302 -        / settings.policy_name                                
+      303 -        / "setup_eval_policy_server.sh"                       
+      304 -    )                                                         
+      298 +    return XPOLICYLAB_ROOT / "policy" / settings.policy_name /
+          + "setup_eval_policy_server.sh"                                
+      299  
+      300  
+      301  def server_command(settings: ServerSettings, instance: ServerI
+           nstance) -> list[str]:
+
+● Update(scripts/eval_policy_server.py)
+  ⎿  Added 5 lines
+      486                  stdout=log_file,
+      487                  stderr=subprocess.STDOUT,
+      488                  start_new_session=True,
+      489 +                env={                                         
+      490 +                    **os.environ,                             
+      491 +                    "BENCH_ROOT": str(ROBOTWIN_ROOT),         
+      492 +                    "XPOLICYLAB_ROOT": str(XPOLICYLAB_ROOT),  
+      493 +                },                                            
+      494              )
+      495              running.append(RunningServer(instance, process, lo
+           g_path, log_file))
+      496              if progress is not None:
+
+  Thought for 2s (ctrl+o to expand)
+
+● Update(scripts/_install.sh)
+  ⎿  Removed 3 lines
+      10  echo "Preparing XPolicyLab ..."
+      11  bash "${RMBENCH_ROOT}/scripts/update_xpolicylab.sh"
+      12  
+      13 -echo "Installing XPolicyLab in the RMBench environment ..."    
+      14 -python -m pip install -e "${RMBENCH_ROOT}/XPolicyLab"          
+      15 -                                                               
+      13  echo "Adjusting code in sapien/wrapper/urdf_loader.py ..."
+      14  # location of sapien, like "~/.conda/envs/RMBench/lib/python3.1
+          0/site-packages/sapien"
+      15  SAPIEN_LOCATION=$(python -m pip show sapien | grep 'Location' |
+           awk '{print $2}')/sapien
+
+● Write(scripts/update_xpolicylab.sh)
+  ⎿  Added 32 lines, removed 93 lines
+       1  #!/usr/bin/env bash
+       2 -# Pull the latest XPolicyLab commit from the branch configured 
+         -in .gitmodules                                                 
+       3 -# (currently main) and update the RMBench submodule checkout.  
+       2 +# Clone or refresh the XPolicyLab checkout that RMBench evaluat
+         +es against.                                                    
+       3  #
+       4 +# XPolicyLab is no longer a git submodule; it lives in a separa
+         +te repository                                                  
+       5 +# located through XPOLICYLAB_ROOT (default: a sibling "XPolicyL
+         +ab" directory                                                  
+       6 +# next to this repository). This script keeps that checkout pin
+         +ned to the                                                     
+       7 +# revision RMBench is tested against.                          
+       8 +#                                                              
+       9  # Usage:
+      10  #   bash scripts/update_xpolicylab.sh
+       7 -#   bash scripts/update_xpolicylab.sh --stage                  
+      11  #   bash scripts/update_xpolicylab.sh --install
+       9 -#   bash scripts/update_xpolicylab.sh --stage --install        
+      12  #
+      13  # Environment:
+      12 -#   XPOLICYLAB_BRANCH  override the tracked branch (default: fr
+         -om .gitmodules, else main)                                     
+      14 +#   XPOLICYLAB_ROOT   override the checkout location           
+      15 +#   XPOLICYLAB_URL    override the clone URL (default: horserr/
+         +XPolicyLab)                                                    
+      16 +#   XPOLICYLAB_REV    override the pinned revision             
+      17  set -euo pipefail
+      18  
+      19  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      16 -ROBOTWIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"                
+      17 -SUBMODULE_PATH="XPolicyLab"                                    
+      18 -DO_STAGE=0                                                     
+      20 +RMBENCH_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"                 
+      21 +                                                               
+      22 +XPOLICYLAB_URL="${XPOLICYLAB_URL:-https://github.com/horserr/XP
+         +olicyLab.git}"                                                 
+      23 +XPOLICYLAB_REV="${XPOLICYLAB_REV:-11efb1dbd8fc03417c61a9c9840dd
+         +9baa1986640}"                                                  
+      24 +XPOLICYLAB_ROOT="${XPOLICYLAB_ROOT:-${RMBENCH_ROOT}/../XPolicyL
+         +ab}"                                                           
+      25 +                                                               
+      26  DO_INSTALL=0
+      27  
+      28  usage() {
+      29      cat <<'EOF'
+      30  Usage: bash scripts/update_xpolicylab.sh [options]
+      31  
+      25 -Fetch and check out the latest XPolicyLab commit on the branch 
+         -configured in                                                  
+      26 -.gitmodules (currently main), then leave RMBench's submodule po
+         -inter updated in                                               
+      27 -the working tree.                                              
+      32 +Clone (or refresh) the standalone XPolicyLab checkout pinned to
+         + XPOLICYLAB_REV.                                               
+      33  
+      34  Options:
+      30 -  --stage     git-add the updated XPolicyLab gitlink so it is r
+         -eady to commit                                                 
+      31 -  --install   pip install -e ./XPolicyLab after a successful up
+         -date                                                           
+      35 +  --install   pip install -e the checkout after a successful up
+         +date                                                           
+      36    -h, --help  show this help
+      37  
+      38  Environment:
+      35 -  XPOLICYLAB_BRANCH  override tracked branch (default: .gitmodu
+         -les branch, else main)                                         
+      39 +  XPOLICYLAB_ROOT  checkout location (default: sibling ../XPoli
+         +cyLab)                                                         
+      40 +  XPOLICYLAB_URL   clone URL (default: horserr/XPolicyLab)     
+      41 +  XPOLICYLAB_REV   pinned revision                             
+      42  EOF
+      43  }
+      44  
+      45  while [[ $# -gt 0 ]]; do
+      46      case "$1" in
+      41 -        --stage)                                               
+      42 -            DO_STAGE=1                                         
+      43 -            shift                                              
+      44 -            ;;                                                 
+      47          --install)
+      48              DO_INSTALL=1
+      49              shift
+     ...
+      52              usage
+      53              exit 0
+      54              ;;
+      53 -        -*)                                                    
+      54 -            echo "[XPolicyLab][ERROR] Unknown option: $1" >&2  
+      55 -            usage >&2                                          
+      56 -            exit 2                                             
+      57 -            ;;                                                 
+      55          *)
+      56              echo "[XPolicyLab][ERROR] Unexpected argument: $1" 
+          >&2
+      57              usage >&2
+     ...
+       60      esac
+       61  done
+       62  
+       66 -cd "${ROBOTWIN_ROOT}"                                         
+       67 -                                                              
+       68 -if [[ ! -f .gitmodules ]]; then                               
+       69 -    echo "[XPolicyLab][ERROR] ${ROBOTWIN_ROOT}/.gitmodules is 
+          -missing." >&2                                                 
+       70 -    exit 1                                                    
+       63 +if [[ ! -e "${XPOLICYLAB_ROOT}/.git" ]]; then                 
+       64 +    echo "[XPolicyLab] Cloning ${XPOLICYLAB_URL} into ${XPOLIC
+          +YLAB_ROOT} ..."                                               
+       65 +    git clone "${XPOLICYLAB_URL}" "${XPOLICYLAB_ROOT}"        
+       66  fi
+       67  
+       73 -configured_branch="$(git config -f .gitmodules --get submodule
+          -."${SUBMODULE_PATH}".branch || true)"                         
+       74 -branch="${XPOLICYLAB_BRANCH:-${configured_branch:-main}}"     
+       75 -pinned_before="$(git rev-parse "HEAD:${SUBMODULE_PATH}" 2>/dev
+          -/null || true)"                                               
+       68 +echo "[XPolicyLab] Fetching pinned revision ${XPOLICYLAB_REV:0
+          +:7} ..."                                                      
+       69 +git -C "${XPOLICYLAB_ROOT}" fetch --prune origin              
+       70 +git -C "${XPOLICYLAB_ROOT}" checkout --detach "${XPOLICYLAB_RE
+          +V}"                                                           
+       71  
+       77 -if [[ -e "${SUBMODULE_PATH}/.git" ]]; then                    
+       78 -    if ! git -C "${SUBMODULE_PATH}" diff --quiet || \         
+       79 -       ! git -C "${SUBMODULE_PATH}" diff --cached --quiet; the
+          -n                                                             
+       80 -        echo "[XPolicyLab][ERROR] Tracked local changes would 
+          -block a safe update." >&2                                     
+       81 -        echo "Commit or stash the changes inside ${SUBMODULE_P
+          -ATH}/, then retry." >&2                                       
+       82 -        exit 1                                                
+       83 -    fi                                                        
+       84 -fi                                                            
+       85 -                                                              
+       86 -echo "[XPolicyLab] Syncing submodule configuration..."        
+       87 -git submodule sync -- "${SUBMODULE_PATH}"                     
+       88 -                                                              
+       89 -# Only initialize when the checkout is missing; re-running `su
+          -bmodule update`                                               
+       90 -# on an existing checkout would revert it to the committed pin
+          - first.                                                       
+       91 -if [[ ! -e "${SUBMODULE_PATH}/.git" ]]; then                  
+       92 -    echo "[XPolicyLab] Initializing submodule checkout..."    
+       93 -    git submodule update --init --recursive --progress "${SUBM
+          -ODULE_PATH}"                                                  
+       94 -fi                                                            
+       95 -                                                              
+       96 -if [[ ! -e "${SUBMODULE_PATH}/.git" ]]; then                  
+       97 -    echo "[XPolicyLab][ERROR] Submodule initialization did not
+          - produce a valid checkout." >&2                               
+       98 -    exit 1                                                    
+       99 -fi                                                            
+      100 -                                                              
+      101 -echo "[XPolicyLab] Fetching latest ${branch} from upstream..."
+      102 -git -C "${SUBMODULE_PATH}" fetch --prune origin "${branch}"   
+      103 -                                                              
+      104 -remote_tip="$(git -C "${SUBMODULE_PATH}" rev-parse "origin/${b
+          -ranch}")"                                                     
+      105 -current="$(git -C "${SUBMODULE_PATH}" rev-parse HEAD)"        
+      106 -                                                              
+      107 -if [[ "${current}" == "${remote_tip}" ]]; then                
+      108 -    echo "[XPolicyLab] Already on latest origin/${branch}: $(g
+          -it -C "${SUBMODULE_PATH}" rev-parse --short HEAD)"            
+      109 -else                                                          
+      110 -    echo "[XPolicyLab] Updating ${current:0:7} -> ${remote_tip
+          -:0:7} (origin/${branch})..."                                  
+      111 -    git -C "${SUBMODULE_PATH}" checkout --detach "${remote_tip
+          -}"                                                            
+      112 -fi                                                            
+      113 -                                                              
+      114 -if [[ ! -f "${SUBMODULE_PATH}/setup_policy_server.py" ]]; then
+       72 +if [[ ! -f "${XPOLICYLAB_ROOT}/setup_policy_server.py" ]]; the
+          +n                                                             
+       73      echo "[XPolicyLab][ERROR] Checkout is missing setup_policy
+           _server.py; update aborted." >&2
+       74      exit 1
+       75  fi
+       76  
+      119 -commit_full="$(git -C "${SUBMODULE_PATH}" rev-parse HEAD)"    
+      120 -commit_short="$(git -C "${SUBMODULE_PATH}" rev-parse --short H
+          -EAD)"                                                         
+      121 -subject="$(git -C "${SUBMODULE_PATH}" log -1 --pretty=%s)"    
+      122 -                                                              
+       77 +commit_short="$(git -C "${XPOLICYLAB_ROOT}" rev-parse --short 
+          +HEAD)"                                                        
+       78 +subject="$(git -C "${XPOLICYLAB_ROOT}" log -1 --pretty=%s)"   
+       79  echo "[XPolicyLab] Ready at ${commit_short} — ${subject}"
+      124 -if [[ -n "${pinned_before}" && "${pinned_before}" != "${commit
+          -_full}" ]]; then                                              
+      125 -    echo "[XPolicyLab] RMBench pin: ${pinned_before:0:7} -> ${
+          -commit_short}"                                                
+      126 -    echo "[XPolicyLab] Commits pulled:"                       
+      127 -    git -C "${SUBMODULE_PATH}" log --oneline "${pinned_before}
+          -..${commit_full}" | sed 's/^/  /'                             
+      128 -elif [[ -n "${pinned_before}" ]]; then                        
+      129 -    echo "[XPolicyLab] RMBench pin already matches ${commit_sh
+          -ort}."                                                        
+      130 -fi                                                            
+       80  
+      132 -robot_info="${SUBMODULE_PATH}/utils/robot/_robot_info.json"   
+       81 +robot_info="${XPOLICYLAB_ROOT}/utils/robot/_robot_info.json"  
+       82  if [[ -f "${robot_info}" ]] && ! grep -q '"arx_x5"' "${robot_i
+           nfo}"; then
+      134 -    echo "[XPolicyLab][WARN] This upstream revision does not d
+          -efine the arx_x5 action profile." >&2                         
+       83 +    echo "[XPolicyLab][WARN] This revision does not define the
+          + arx_x5 action profile." >&2                                  
+       84      echo "[XPolicyLab][WARN] Select another compatible profile
+            in the RMBench eval config." >&2
+       85  fi
+       86  
+       87  if [[ "${DO_INSTALL}" -eq 1 ]]; then
+       88      echo "[XPolicyLab] Installing editable package into the cu
+           rrent Python environment..."
+      140 -    python -m pip install -e "${ROBOTWIN_ROOT}/${SUBMODULE_PAT
+          -H}"                                                           
+       89 +    python -m pip install -e "${XPOLICYLAB_ROOT}"             
+       90  fi
+      142 -                                                              
+      143 -if [[ "${DO_STAGE}" -eq 1 ]]; then                            
+      144 -    git add "${SUBMODULE_PATH}"                               
+      145 -    echo "[XPolicyLab] Staged ${SUBMODULE_PATH} at ${commit_sh
+          -ort}."                                                        
+      146 -    echo "[XPolicyLab] Commit when ready, e.g.: git commit -m 
+          -\"Bump XPolicyLab to ${commit_short}\""                       
+      147 -else                                                          
+      148 -    echo "[XPolicyLab] Working tree pin updated. Record it wit
+          -h:"                                                           
+      149 -    echo "  git add ${SUBMODULE_PATH} && git commit -m \"Bump 
+          -XPolicyLab to ${commit_short}\""                              
+      150 -    echo "Or re-run with --stage to stage automatically."     
+      151 -fi                                                            
+
+  Thought for 4s (ctrl+o to expand)
+
+● Update(.devcontainer/check.sh)
+  ⎿  Added 2 lines, removed 1 line
+      24  ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+      25  VENV="${UV_PROJECT_ENVIRONMENT:-/opt/venv}"
+      26  PY="${VENV}/bin/python"
+      27 -OPENPI_PY="${ROOT}/XPolicyLab/policy/Pi_05/openpi/.venv/bin/pyt
+         -hon"                                                           
+      27 +XPL_ROOT="${XPOLICYLAB_ROOT:-${ROOT}/XPolicyLab}"              
+      28 +OPENPI_PY="${XPL_ROOT}/policy/Pi_05/openpi/.venv/bin/python"   
+      29  ICD_SRC="/etc/vulkan/icd.d/nvidia_icd.json"
+      30  ICD_LINK="/usr/share/vulkan/icd.d/nvidia_icd.json"
+      31  
+
+● Update(.devcontainer/check.sh)
+  ⎿  Added 1 line, removed 1 line
+      190      if uv python install 3.11 >/dev/null 2>&1 && [ -x "${OPENP
+           I_PY}" ] && openpi_ver="$("${OPENPI_PY}" -V 2>&1)"; then
+      191        pass "已修复解释器：${openpi_ver}"
+      192      else
+      193 -      fail "uv python install 3.11 后仍不可用 → 完整重装：bash
+          - XPolicyLab/policy/Pi_05/install.sh"                          
+      193 +      fail "uv python install 3.11 后仍不可用 → 完整重装：bash
+          + ${XPL_ROOT}/policy/Pi_05/install.sh"                         
+      194      fi
+      195    else
+      196      fail "openpi/.venv/bin/python 悬空（uv 管理的 Python 丢失
+           ），执行 uv python install 3.11 或加 --fix"
+
+● Update(.devcontainer/check.sh)
+  ⎿  Added 1 line, removed 1 line
+      212  else
+      213    warn "缺少 assets/.extract_complete → 重建时会重新下载约 11G
+            资产"
+      214  fi
+      215 -ckpt="${ROOT}/XPolicyLab/policy/Pi_05/checkpoints/RoboTwin-ler
+          -obot_v30-aloha_agilex-joint-0/29999"                          
+      215 +ckpt="${XPL_ROOT}/policy/Pi_05/checkpoints/RoboTwin-lerobot_v3
+          +0-aloha_agilex-joint-0/29999"                                 
+      216  if [ -d "${ckpt}" ]; then
+      217    pass "checkpoint 29999 已就位"
+      218  else
+● Update(.devcontainer/initialize.sh)
+  ⎿  Added 1 line, removed 1 line
+      10  
+      11  # Idempotent: safe to re-run on every container creation / rebu
+          ild.
+      12  echo "[initialize] Updating git submodules..."
+      13 -git submodule update --init --recursive                        
+      13 +git submodule update --init --recursive env/curobo             
+      14  
+      15  # update_xpolicylab.sh already guards against clobbering an exi
+          sting checkout.
+      16  echo "[initialize] Updating XPolicyLab..."
+
+  Thought for 8s (ctrl+o to expand)
+
+● Update(README.md)
+  ⎿  Added 4 lines, removed 4 lines
+      28  RMBench Repo: https://github.com/RoboTwin-Platform/RMBench
+      29  
+      30  ```
+      31 -git clone --recurse-submodules https://github.com/RoboTwin-Plat
+         -form/RMBench.git                                               
+      31 +git clone https://github.com/RoboTwin-Platform/RMBench.git     
+      32  cd RMBench
+      33  ```
+      34  
+      35 -For an existing checkout, initialize the pinned XPolicyLab subm
+         -odule:                                                         
+      35 +XPolicyLab is a separate repository (no longer a submodule). Cl
+         +one it next to RMBench and refresh the pin; set `XPOLICYLAB_ROO
+         +T` to use a checkout anywhere else:                            
+      36  
+      37  ```
+      38 -git submodule update --init --recursive XPolicyLab             
+      38 +bash scripts/update_xpolicylab.sh                              
+      39  ```
+      40  
+      41 -Then, run `scripts/_install.sh` to install basic conda envs, Cu
+         -Robo, and XPolicyLab:                                          
+      41 +Then, run `scripts/_install.sh` to install basic conda envs and
+         + CuRobo:                                                       
+      42  
+      43  ```
+      44  bash scripts/_install.sh
+
+● Update(README.md)
+  ⎿  Error editing file
+
+  Thought for 1s, read 1 file (ctrl+o to expand)
+
+● Update(README.md)
+  ⎿  Added 2 lines, removed 2 lines
+      118  **XPolicyLab adapters** (recommended for new work):
+      119  
+      120  ```
+      121 -bash XPolicyLab/policy/Mem_0/eval.sh RMBench <task_name> <ckpt
+          -_name> <env_cfg_type> <action_type> <seed> \                  
+      121 +bash "${XPOLICYLAB_ROOT:-../XPolicyLab}/policy/Mem_0/eval.sh" 
+          +RMBench <task_name> <ckpt_name> <env_cfg_type> <action_type> <
+          +seed> \                                                       
+      122    <policy_gpu_id> <env_gpu_id> <policy_env> <eval_env>
+      123  
+      124  # or schedule the RMBench task list
+     ...
+      131    --eval-env-conda-env RMBench
+      132  ```
+      133  
+      134 -See [XPolicyLab/policy/Mem_0/](XPolicyLab/policy/Mem_0/) for t
+          -he Mem-0 adapter. Task configs live in `env_cfg/task_config/`.
+      134 +See the Mem-0 adapter under `${XPOLICYLAB_ROOT}/policy/Mem_0/`
+          + in the XPolicyLab repository. Task configs live in `env_cfg/t
+          +ask_config/`.                                                 
+      135  
+      136  # 👍 Citations
+      137  
+
+  Thought for 1m 36s, read 1 file, ran 3 shell commands (ctrl+o to expand)
+
+● Write(XPolicyLab/utils/get_action_dim.sh)
+  ⎿  Added 7 lines, removed 4 lines
+       1  #!/bin/bash
+       2  set -e
+       3  
+       4 -ROOT_DIR="$1"                                                  
+       4 +# Locate the XPolicyLab root from this script's own location in
+         +stead of the                                                   
+       5 +# caller's benchmark root, so callers no longer need to know wh
+         +ere the checkout                                               
+       6 +# lives (it used to be derived as <ROOT_DIR>/XPolicyLab/...).  
+       7 +XPL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"    
+       8  env_cfg_type="$2"
+       9  
+      10  python3 -c '
+      11  import sys, os, json
+      12  
+      10 -root_dir = sys.argv[1]                                         
+      13 +xpl_root = sys.argv[1]                                         
+      14  env_cfg_type = sys.argv[2]
+      15  
+      16  robot_action_dim_info = json.load(
+      14 -    open(os.path.join(root_dir, "XPolicyLab", "utils", "robot",
+         - "_robot_info.json"), "r", encoding="utf-8")                   
+      17 +    open(os.path.join(xpl_root, "utils", "robot", "_robot_info.
+         +json"), "r", encoding="utf-8")                                 
+      18  )[env_cfg_type]
+      19  
+      20  print(sum(robot_action_dim_info["arm_dim"]) + sum(robot_action_
+          dim_info["ee_dim"]))
+      18 -' "${ROOT_DIR}" "${env_cfg_type}"                              
+      21   No newline at end of file
+      22 +' "${XPL_ROOT}" "${env_cfg_type}"                              
+
+  Thought for 11s, read 2 files (ctrl+o to expand)
+  ⎿  Loaded policy/MemConflict/CLAUDE.md
+
+● Update(XPolicyLab/policy/Mem_0/setup_eval_policy_server.sh)
+  ⎿  Added 1 line
+      16  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      17  XPL_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+      18  BENCH_ROOT="${BENCH_ROOT:-$(cd "${XPL_ROOT}/.." && pwd)}"
+      19 +XPL_PARENT="$(cd "${XPL_ROOT}/.." && pwd)"                     
+      20  UTILS_DIR="${XPL_ROOT}/utils"
+      21  
+      22  policy_name="$(basename "${SCRIPT_DIR}")"
+
+● Update(XPolicyLab/policy/Mem_0/setup_eval_policy_server.sh)
+  ⎿  Added 1 line, removed 1 line
+      70  source "$(conda info --base)/etc/profile.d/conda.sh"
+      71  conda activate "${policy_conda_env}"
+      72  
+      73 -action_dim=$(bash "${UTILS_DIR}/get_action_dim.sh" "${BENCH_ROO
+         -T}" "${env_cfg_type}")                                         
+      73 +action_dim=$(bash "${UTILS_DIR}/get_action_dim.sh" "${XPL_ROOT}
+         +" "${env_cfg_type}")                                           
+      74  echo -e "\033[33m[SERVER] action_dim=${action_dim}\033[0m"
+      75  
+      76  exec env \
+
+● Update(XPolicyLab/policy/Mem_0/setup_eval_policy_server.sh)
+  ⎿  Added 1 line, removed 1 line
+      77      PYTHONWARNINGS=ignore::UserWarning \
+      78      PYTHONUNBUFFERED=1 \
+      79      CUDA_VISIBLE_DEVICES="${policy_gpu_id}" \
+      80 -    PYTHONPATH="${BENCH_ROOT}:${UPSTREAM_DIR}:${PYTHONPATH:-}" 
+         -\                                                              
+      80 +    PYTHONPATH="${XPL_PARENT}:${BENCH_ROOT}:${UPSTREAM_DIR}:${P
+         +YTHONPATH:-}" \                                                
+      81      python -u "${XPL_ROOT}/setup_policy_server.py" \
+      82          --config_path "${yaml_file}" \
+      83          --overrides \
+
+● Update(XPolicyLab/policy/MemConflict/setup_eval_policy_server.sh)
+  ⎿  Added 1 line
+      16  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      17  XPL_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+      18  BENCH_ROOT="${BENCH_ROOT:-$(cd "${XPL_ROOT}/.." && pwd)}"
+      19 +XPL_PARENT="$(cd "${XPL_ROOT}/.." && pwd)"                     
+      20  UTILS_DIR="${XPL_ROOT}/utils"
+      21  
+      22  policy_name="$(basename "${SCRIPT_DIR}")"
+
+● Update(XPolicyLab/policy/MemConflict/setup_eval_policy_server.sh)
+  ⎿  Added 1 line, removed 1 line
+      77      echo -e "\033[33m[SERVER] no conda; using policy venv ${POL
+          ICY_VENV}\033[0m"
+      78  fi
+      79  
+      80 -action_dim=$(bash "${UTILS_DIR}/get_action_dim.sh" "${BENCH_ROO
+         -T}" "${env_cfg_type}")                                         
+      80 +action_dim=$(bash "${UTILS_DIR}/get_action_dim.sh" "${XPL_ROOT}
+         +" "${env_cfg_type}")                                           
+      81  echo -e "\033[33m[SERVER] action_dim=${action_dim}\033[0m"
+      82  
+      83  exec env \
+
+● Update(XPolicyLab/policy/MemConflict/setup_eval_policy_server.sh)
+  ⎿  Added 1 line, removed 1 line
+      84      PYTHONWARNINGS=ignore::UserWarning \
+      85      PYTHONUNBUFFERED=1 \
+      86      CUDA_VISIBLE_DEVICES="${policy_gpu_id}" \
+      87 -    PYTHONPATH="${BENCH_ROOT}:${UPSTREAM_DIR}:${PYTHONPATH:-}" 
+         -\                                                              
+      87 +    PYTHONPATH="${XPL_PARENT}:${BENCH_ROOT}:${UPSTREAM_DIR}:${P
+         +YTHONPATH:-}" \                                                
+      88      python -u "${XPL_ROOT}/setup_policy_server.py" \
+      89          --config_path "${yaml_file}" \
+      90          --overrides \
+
+  Thought for 5s, ran 1 shell command (ctrl+o to expand)
+
+● Update(XPolicyLab/policy/Mem_0/install.sh)
+  ⎿  Added 1 line, removed 1 line
+       9  
+      10  POLICY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      11  UPSTREAM_DIR="${POLICY_DIR}/Mem_0"
+      12 -ROOT_DIR="$(cd "${POLICY_DIR}/../../.." && pwd)"               
+      12 +XPL_ROOT="$(cd "${POLICY_DIR}/../.." && pwd)"                  
+      13  
+      14  source "$(conda info --base)/etc/profile.d/conda.sh"
+      15  
+
+● Update(XPolicyLab/policy/Mem_0/install.sh)
+  ⎿  Added 1 line, removed 1 line
+      25  pip install openai opencv-python 
+      26  
+      27  # XPolicyLab package (needed by process_data.sh / model.py impo
+          rts).
+      28 -pip install -e "${ROOT_DIR}/XPolicyLab"                        
+      28 +pip install -e "${XPL_ROOT}"                                   
+      29  
+      30  echo "[install] ${policy_conda_env} ready."
+      31  echo "[install] Download backbones:  python ${POLICY_DIR}/scrip
+          ts/_download.py"
+
+● Update(XPolicyLab/policy/MemConflict/install.sh)
+  ⎿  Added 1 line, removed 1 line
+       9  
+      10  POLICY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      11  UPSTREAM_DIR="${POLICY_DIR}/Mem_0"
+      12 -ROOT_DIR="$(cd "${POLICY_DIR}/../../.." && pwd)"               
+      12 +XPL_ROOT="$(cd "${POLICY_DIR}/../.." && pwd)"                  
+      13  
+      14  source "$(conda info --base)/etc/profile.d/conda.sh"
+      15  
+
+● Update(XPolicyLab/policy/MemConflict/install.sh)
+  ⎿  Added 1 line, removed 1 line
+      25  pip install openai opencv-python 
+      26  
+      27  # XPolicyLab package (needed by process_data.sh / model.py impo
+          rts).
+      28 -pip install -e "${ROOT_DIR}/XPolicyLab"                        
+      28 +pip install -e "${XPL_ROOT}"                                   
+      29  
+      30  echo "[install] ${policy_conda_env} ready."
+      31  echo "[install] Download backbones:  python ${POLICY_DIR}/scrip
+          ts/_download.py"
+
+  Thought for 2s, searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Update(XPolicyLab/policy/Mem_0/process_data_batch.sh)
+  ⎿  Added 2 lines, removed 1 line
+      44  POLICY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      45  # Match xpolicylab_batch_to_lerobot.py's ROOT_DIR: 3 levels up 
+          from policy/Mem_0
+      46  # (== 4 levels up from Mem_0/Mem_0) so source data resolves to 
+          <root>/data/...
+      47 -ROOT_DIR="$(cd "${POLICY_DIR}/../../.." && pwd)"               
+      47 +# BENCH_ROOT (set by the benchmark) overrides the embedded fall
+         +back.                                                          
+      48 +ROOT_DIR="${BENCH_ROOT:-$(cd "${POLICY_DIR}/../../.." && pwd)}"
+      49  ADAPTER_DIR="${POLICY_DIR}/Mem_0/xpolicylab_adapter"
+      50  ADAPTER="${ADAPTER_DIR}/adapt_shared_lerobot_to_mem0.py"
+      51  CONVERTER="${ADAPTER_DIR}/xpolicylab_batch_to_lerobot.py"
+
+● Update(XPolicyLab/policy/MemConflict/process_data_batch.sh)  ⎿  Added 1 line, removed 1 line
+      44  POLICY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      45  # Match xpolicylab_batch_to_lerobot.py's ROOT_DIR: 3 levels up 
+          from policy/Mem_0
+      46  # (== 4 levels up from Mem_0/Mem_0) so source data resolves to 
+          <root>/data/...
+      47 -ROOT_DIR="$(cd "${POLICY_DIR}/../../.." && pwd)"               
+      47 +ROOT_DIR="${BENCH_ROOT:-$(cd "${POLICY_DIR}/../../.." && pwd)}"
+      48  ADAPTER_DIR="${POLICY_DIR}/Mem_0/xpolicylab_adapter"
+      49  ADAPTER="${ADAPTER_DIR}/adapt_shared_lerobot_to_mem0.py"
+      50  CONVERTER="${ADAPTER_DIR}/xpolicylab_batch_to_lerobot.py"
+
+  Thought for 5s, read 1 file (ctrl+o to expand)
+
+● Update(XPolicyLab/utils/process_data.py)
+  ⎿  Added 16 lines, removed 6 lines
+      249  
+      250      return result
+      251  
+      252 +def _env_cfg_root():                                          
+      253 +    # The benchmark env_cfg/ tree lives in the parent workspac
+          +e, not inside this                                            
+      254 +    # checkout. Prefer an explicit BENCH_ROOT (set by the benc
+          +hmark); fall back                                             
+      255 +    # to the old embedded-layout relative path for backward co
+          +mpatibility.                                                  
+      256 +    bench_root = os.environ.get("BENCH_ROOT")                 
+      257 +    if bench_root:                                            
+      258 +        return os.path.join(bench_root, "env_cfg")            
+      259 +    return os.path.join(os.path.dirname(__file__), "../../env_
+          +cfg")                                                         
+      260 +                                                              
+      261 +                                                              
+      262  def get_robot_action_dim_info(env_cfg_type):
+      253 -    env_cfg = load_yaml(os.path.join(os.path.dirname(__file__)
+          -, "../../env_cfg", f"{env_cfg_type}.yml"))                    
+      263 +    env_cfg = load_yaml(os.path.join(_env_cfg_root(), f"{env_c
+          +fg_type}.yml"))                                               
+      264      robot_name = env_cfg['config']['robot']
+      255 -    robot_action_dim_info = load_json(os.path.join(os.path.dir
+          -name(__file__), "../../env_cfg/robot", "_robot_info.json"))[ro
+          -bot_name]                                                     
+      265 +    robot_action_dim_info = load_json(os.path.join(_env_cfg_ro
+          +ot(), "robot", "_robot_info.json"))[robot_name]               
+      266  
+      267      return robot_action_dim_info
+      268  
+      269  def get_batch_size(env_cfg_type):
+      260 -    env_cfg = load_yaml(os.path.join(os.path.dirname(__file__)
+          -, "../../env_cfg", f"{env_cfg_type}.yml"))                    
+      270 +    env_cfg = load_yaml(os.path.join(_env_cfg_root(), f"{env_c
+          +fg_type}.yml"))                                               
+      271      sim_cfg = env_cfg['config']['sim']
+      262 -    sim_info = load_yaml(os.path.join(os.path.dirname(__file__
+          -), "../../env_cfg/sim", f"{sim_cfg}.yml"))                    
+      272 +    sim_info = load_yaml(os.path.join(_env_cfg_root(), "sim", 
+          +f"{sim_cfg}.yml"))                                            
+      273  
+      274      return sim_info['scene']['num_envs']
+      275  
+      276  def get_action_dim(env_cfg_type):
+      267 -    env_cfg = load_yaml(os.path.join(os.path.dirname(__file__)
+          -, "../../env_cfg", f"{env_cfg_type}.yml"))                    
+      277 +    env_cfg = load_yaml(os.path.join(_env_cfg_root(), f"{env_c
+          +fg_type}.yml"))                                               
+      278      robot_name = env_cfg['config']['robot']
+      269 -    robot_action_dim_info = load_json(os.path.join(os.path.dir
+          -name(__file__), "../../env_cfg/robot", "_robot_info.json"))[ro
+          -bot_name]                                                     
+      279 +    robot_action_dim_info = load_json(os.path.join(_env_cfg_ro
+          +ot(), "robot", "_robot_info.json"))[robot_name]               
+      280      return sum(robot_action_dim_info["arm_dim"]) + sum(robot_a
+           ction_dim_info["ee_dim"])
+      281  
+      282  # Two image bit stream formats exist in XPolicyLab data, and b
+           oth decode to RGB.
+
+  Thought for 2m 9s, searched for 1 pattern, ran 9 shell commands (ctrl+o to expand)
+
+● 拆分已实现完成，两边仓库的文件改动都已落地，全部通过语法检查。以下是结果和剩下
+  的手工步骤。
+
+  已完成
+
+  RMBench 侧
+
+  - .gitmodules 移除 XPolicyLab 条目（保留 env/curobo）；.gitignore 忽略
+    XPolicyLab/。
+  - 新增
+    scripts/xpolicylab_paths.py：resolve_xpolicylab_root()（--xpolicylab_root
+    参数 > $XPOLICYLAB_ROOT > 平级 ../XPolicyLab，校验 setup_policy_server.py
+    存在）。
+  - scripts/eval_policy_xpolicylab.py / eval_policy_multitask.py /
+    eval_policy_server.py：删掉 ROBOTWIN_ROOT/"XPolicyLab"
+    硬编码，改用解析器；调度器和服务池启动子进程时注入 BENCH_ROOT 与
+    XPOLICYLAB_ROOT。
+  - pyproject.toml 移除 xpolicylab 依赖与 source；uv lock 已重新生成（Removed 
+    xpolicylab v0.0.1）。
+  - scripts/_install.sh、scripts/update_xpolicylab.sh（submodule 管理 → 普通
+    clone/pull 助手，pin XPOLICYLAB_REV）、.devcontainer/*、README.md 同步更新。
+
+  XPolicyLab 侧（horserr fork）
+
+  - 128 个适配器脚本 BENCH_ROOT="$(cd "${XPL_ROOT}/.." && pwd)" →
+    BENCH_ROOT="${BENCH_ROOT:-…}"（环境变量覆盖 + 旧布局回退）。
+  - utils/get_action_dim.sh 改为自定位（从自身路径找
+    utils/robot/_robot_info.json，不再依赖 ${ROOT_DIR}/XPolicyLab/...）；实测
+    arx_x5 返回 14。
+  - Mem_0/MemConflict 的 setup_eval_policy_server.sh：新增 XPL_PARENT 并加入
+    PYTHONPATH（拆平级后 import XPolicyLab.policy.<name>.model
+    仍可用）；install.sh/process_data_batch.sh 去 benchmark
+    内嵌假设；utils/process_data.py 的
+    get_robot_action_dim_info/get_action_dim/get_batch_size 优先读
+    $BENCH_ROOT/env_cfg。
+
+  验证：所有改动 Python py_compile 通过、Shell bash -n
+  通过；resolve_xpolicylab_root() 在默认（无平级 checkout）时报清晰错误、设
+  $XPOLICYLAB_ROOT 后正确解析。
+
+  剩余手工步骤（git 操作，需你执行）
+
+  我没有 commit/push 任何内容（所有改动都在工作区未暂存）。git rm --cached 
+  XPolicyLab 需要先暂存 .gitmodules，故未自动完成。建议顺序：
+
+  1. 先提交 XPolicyLab 侧改动到 fork（子模块内未提交，138 个文件）：
+  cd XPolicyLab
+  git add -A
+  git commit -m "Decouple benchmark paths: BENCH_ROOT env var, self-locating 
+  get_action_dim"
+  git push origin memconflict   # 或你的目标分支
+  2. 回主仓库更新 pin：把 scripts/update_xpolicylab.sh 里的 XPOLICYLAB_REV
+     改成上一步 push 后的新 commit SHA。
+  3. 去 submodule + 提交 RMBench：
+  cd /root/workspace/RMBench
+  git add .gitmodules && git rm --cached XPolicyLab
+  git add -A   # .gitignore pyproject uv.lock README scripts/ .devcontainer/ 等
+  git commit -m "Split XPolicyLab out of RMBench as a sibling repo 
+  (XPOLICYLAB_ROOT)"
+  4. （可选）删除树内 checkout 与子模块元数据，改用平级 clone：
+  rm -rf XPolicyLab .git/modules/XPolicyLab
+  bash scripts/update_xpolicylab.sh   # clone 到 ../XPolicyLab 并 pin 到新 REV
+
+  需要我帮你执行第 1、3 步的 commit（不 push）吗？还是你想先自己 review 一下
+  diff？
+
+✻ Cogitated for 12m 49s · done Sunday 5:30 PM
+
+※ recap: Goal: split XPolicyLab out of RMBench as a sibling repo. All file edits on both sides are done and syntax-checked. Next: you commit the XPolicyLab-side changes to the fork, then de-submodule RMBench. (disable recaps in /config)

@@ -31,7 +31,3 @@ envs/curobo/*
 
 /*.json*
 /*.txt
-
-# Claude Code local/private (do not commit to the fork)
-.claude/settings.local.json
-.claude/archive/
